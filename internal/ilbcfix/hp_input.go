@@ -1,0 +1,51 @@
+package ilbcfix
+
+// hpInput mirrors WebRtcIlbcfix_HpInput (hp_input.c): high-pass filter of
+// input with *0.5 and saturation. ba = {b[0] b[1] b[2] -a[1] -a[2]}.
+// y holds filter state yhi[n-1] ylow[n-1] yhi[n-2] ylow[n-2]; x holds
+// x[n-1] x[n-2].
+func hpInput(signal []int16, ba []int16, y []int16, x []int16, length int) {
+	for i := 0; i < length; i++ {
+		var tmpW32 int32
+
+		tmpW32 = mul16(y[1], ba[3])  /* (-a[1])*y[i-1] (low part) */
+		tmpW32 += mul16(y[3], ba[4]) /* (-a[2])*y[i-2] (low part) */
+		tmpW32 = tmpW32 >> 15
+		tmpW32 += mul16(y[0], ba[3]) /* (-a[1])*y[i-1] (high part) */
+		tmpW32 += mul16(y[2], ba[4]) /* (-a[2])*y[i-2] (high part) */
+		tmpW32 = tmpW32 << 1
+
+		tmpW32 += mul16(signal[i], ba[0]) /* b[0]*x[0] */
+		tmpW32 += mul16(x[0], ba[1])      /* b[1]*x[i-1] */
+		tmpW32 += mul16(x[1], ba[2])      /* b[2]*x[i-2] */
+
+		/* Update state (input part) */
+		x[1] = x[0]
+		x[0] = signal[i]
+
+		/* Rounding in Q(12+1), i.e. add 2^12 */
+		tmpW32b := tmpW32 + 4096
+
+		/* Saturate (to 2^28) so that the HP filtered signal does not overflow */
+		tmpW32b = splSat(268435455, tmpW32b, -268435456)
+
+		/* Convert back to Q0 and multiply with 0.5 */
+		signal[i] = int16(tmpW32b >> 13)
+
+		/* Update state (filtered part) */
+		y[2] = y[0]
+		y[3] = y[1]
+
+		/* upshift tmpW32 by 3 with saturation */
+		if tmpW32 > 268435455 {
+			tmpW32 = word32Max
+		} else if tmpW32 < -268435456 {
+			tmpW32 = word32Min
+		} else {
+			tmpW32 <<= 3
+		}
+
+		y[0] = int16(tmpW32 >> 16)
+		y[1] = int16((tmpW32 - (int32(y[0]) << 16)) >> 1)
+	}
+}
